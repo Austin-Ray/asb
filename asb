@@ -1,0 +1,64 @@
+#!/bin/bash
+COMMAND=$1
+PACKAGE=$2
+
+# TODO: Change this to handle user preferrence
+OUTPUT_DIR="$HOME/builds/packages"
+
+main() {
+  if [ "$COMMAND" == "install" ]; then
+    install_package
+  elif [ "$COMMAND" == "update" ]; then
+    update_package
+  else 
+    echo "Invalid command"
+  fi
+}
+
+install_package () {
+  (asp checkout "$PACKAGE" &> /dev/null && {  
+  
+    navigate_to_dir
+    build_package
+  } ) || {
+    update_package
+  }
+}
+
+update_package () {
+    asp update "$PACKAGE" &> /dev/null
+  
+    navigate_to_dir
+    build_package
+}
+
+# Navigate to the appropriate directory for building
+navigate_to_dir () {
+  # Does not support testing repository at the moment
+  # TODO: Include support for testing
+  REPO=$(asp list-repos "$PACKAGE" | grep "core\|extra\|community\|multilib")
+  cd "$PACKAGE/repos/$REPO-x86_64/" || return
+}
+
+build_package () {
+  OLD_PKGDEST="$PKGDEST"
+  export PKGDEST="$OUTPUT_DIR/$PACKAGE/" 
+  mkdir -p "$PKGDEST"
+  # Download the dependencies, build the package, and clean up afterwards
+  # Do not install at this point. This is still a very simple script so installing
+  # can be dangerous until the script has been refined.
+  # TODO: Change this to allow more configuration
+  makepkg -sc || {
+    echo "Package has already been compiled. Would you like to recompile? [Y/n]"
+    read -r CHOICE
+
+    case $CHOICE in 
+      'Y' | 'y' | '') makepkg -scf;;
+      *) return 1;;
+    esac;
+  }
+
+  export PKGDEST=$OLD_PKGDEST
+}
+
+main "$@"
