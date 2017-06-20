@@ -2,14 +2,20 @@
 COMMAND=$1
 PACKAGE=$2
 
+# Some packages are part of larger packages e.g. gvim is part of vim
+BASE_PACKAGE="$(asp checkout "$PACKAGE" | grep '==>' | cut -d' ' -f7)"
+
 # TODO: Change this to handle user preferrence
-OUTPUT_DIR="$HOME/builds/packages"
+ASB_STORAGE_LOC="$HOME/builds"
+OUTPUT_DIR="$ASB_STORAGE_LOC/packages"
 
 main() {
   if [ "$COMMAND" == "install" ]; then
     install_package
   elif [ "$COMMAND" == "update" ]; then
     update_package
+  elif [ "$COMMAND" == "remove" ]; then
+    remove_package
   else 
     echo "Invalid command"
   fi
@@ -17,7 +23,7 @@ main() {
 
 install_package () {
   (asp checkout "$PACKAGE" &> /dev/null && {  
-  
+    move_git_repo
     navigate_to_dir
     build_package
   } ) || {
@@ -32,18 +38,37 @@ update_package () {
     build_package
 }
 
+remove_package () {
+  # Notify the user that pacman is being run with sudo
+  echo "Launching pacman -R with sudo"
+
+  # Remove the package from pacman
+  sudo pacman -R "$PACKAGE"
+
+  # Clean up the output directory by removing git directory and any build packages
+  rm -rf "${OUTPUT_DIR:?}/$PACKAGE"
+  rm -rf "${ASB_STORAGE_LOC:?}/$PACKAGE"
+}
+
 # Navigate to the appropriate directory for building
 navigate_to_dir () {
   # Does not support testing repository at the moment
   # TODO: Include support for testing
   REPO=$(asp list-repos "$PACKAGE" | grep "core\|extra\|community\|multilib")
-  cd "$PACKAGE/repos/$REPO-x86_64/" || return
+  cd "$ASB_STORAGE_LOC/$BASE_PACKAGE/repos/$REPO-x86_64" || return
+}
+
+# ASP doesn't support changing where the files are cloned so they have to be moved
+# to prevent cluttering up wherever the command was executed from.
+move_git_repo () {
+  mv "$BASE_PACKAGE" "$ASB_STORAGE_LOC/$BASE_PACKAGE"
 }
 
 build_package () {
   OLD_PKGDEST="$PKGDEST"
-  export PKGDEST="$OUTPUT_DIR/$PACKAGE/" 
+  export PKGDEST="$OUTPUT_DIR/$PACKAGE" 
   mkdir -p "$PKGDEST"
+
   # Download the dependencies, build the package, and clean up afterwards
   # Do not install at this point. This is still a very simple script so installing
   # can be dangerous until the script has been refined.
