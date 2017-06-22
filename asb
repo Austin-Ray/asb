@@ -1,46 +1,87 @@
 #!/bin/bash
-COMMAND=$1
-PACKAGE=$2
 
-# Some packages are part of larger packages e.g. gvim is part of vim
-BASE_PACKAGE="$(asp list-repos "$PACKAGE" | grep '==>' | cut -d' ' -f7)"
-
-if [ "$BASE_PACKAGE" == '' ]; then
-  BASE_PACKAGE="$PACKAGE"
-fi
+# OVERALL TODO LIST
+# 1. Suppress ambiguity warning from ASP. This originates from not specifying the version number.
 
 # TODO: Change this to handle user preferrence
 ASB_STORAGE_LOC="$HOME/builds"
 OUTPUT_DIR="$ASB_STORAGE_LOC/packages"
 
 main() {
-  if [ "$COMMAND" == "install" ]; then
-    install_package
-  elif [ "$COMMAND" == "update" ]; then
-    update_package
-  elif [ "$COMMAND" == "remove" ]; then
-    remove_package
-  else 
-    echo "Invalid command"
-  fi
+  # Check to make sure the OUTPUT_DIR exists, otherwise create it.
+  ls "$OUTPUT_DIR" &> /dev/null || mkdir -p "$OUTPUT_DIR"
+  process_arguments "$@"
+}
+
+process_arguments () {
+  # Handle the three operations currently available
+  case "$1" in
+    -S) install_package "$2";;
+    -Su) update_package;;
+    -R) remove_package "$2";;
+    *) echo "Invalid command";;
+  esac
 }
 
 install_package () {
-  (asp checkout "$PACKAGE" && {  
-    move_git_repo
-    navigate_to_dir
-    build_package
-  } ) || {
-    update_package
-  }
+  # Use ASP to get the Git repo for the package
+  asp checkout "$1"
+
+  find_base_package "$1"
+  move_git_repo
+  navigate_to_dir "$1"
+  build_package "$1"
 }
 
 update_package () {
-    asp update "$PACKAGE" &> /dev/null
-  
-    echo "UPDATE"
-    navigate_to_dir
-    build_package
+  # Sync the local package database with mirrors
+  echo "Executing pacman -Sy with sudo"
+  sudo pacman -Sy
+
+  # Query the package manager for every package with an update
+  echo "Querying pacman for packages with updates"
+  ALL_PACKAGES=($(pacman -Qu | cut -d ' ' -f1))
+
+  # Iterate through the list of all packages to check if asb has been
+  # used to compile the package from source. This allows the user to
+  # use pacman alongside asb to install some packages that he or she
+  # may not want to compile
+  PACKAGES=()
+  for I in "${ALL_PACKAGES[@]}"
+  do
+    # Find the correct base package.
+    find_base_package "$I"
+
+    # Check that there is a directory in the asb storage directory.
+    if [ "$(ls $ASB_STORAGE_LOC | grep "$BASE_PACKAGE")" != '' ]; then
+      # If a directory does exist, add the the packages to update
+      PACKAGES+=($BASE_PACKAGE)
+    fi
+  done
+
+  # Fetch all the Git repos prior to compiling.
+  for I in "${PACKAGES[@]}"
+  do
+    asp update "$I"
+  done
+
+  # For each package, navigate to the git folder and build package
+  for I in "${PACKAGES[@]}"
+  do
+    navigate_to_dir "$I"
+    build_package "$I"
+  done
+}
+
+find_base_package () {
+  # Some packages are part of larger packages e.g. gvim is part of vim
+  # Such a case needs to be handled.
+  BASE_PACKAGE="$(asp list-repos "$1" | grep '==>' | cut -d' ' -f7)"
+
+  # If the above command returns nothing, then the base package is itself
+  if [ "$BASE_PACKAGE" == '' ]; then
+    BASE_PACKAGE="$1"
+  fi
 }
 
 remove_package () {
@@ -48,18 +89,19 @@ remove_package () {
   echo "Launching pacman -R with sudo"
 
   # Remove the package from pacman
-  sudo pacman -R "$PACKAGE"
+  sudo pacman -R "$1"
 
   # Clean up the output directory by removing git directory and any build packages
-  rm -rf "${OUTPUT_DIR:?}/$PACKAGE"
-  rm -rf "${ASB_STORAGE_LOC:?}/$PACKAGE"
+  rm -rf "${OUTPUT_DIR:?}/$1"
+  rm -rf "${ASB_STORAGE_LOC:?}/$1"
 }
 
 # Navigate to the appropriate directory for building
 navigate_to_dir () {
+  find_base_package "$1"
   # Does not support testing repository at the moment
   # TODO: Include support for testing
-  REPO=$(asp list-repos "$PACKAGE" | grep "core\|extra\|community\|multilib")
+  REPO=$(asp list-repos "$1" | grep "core\|extra\|community\|multilib")
   cd "$ASB_STORAGE_LOC/$BASE_PACKAGE/repos/$REPO-x86_64" || return
 }
 
@@ -69,9 +111,10 @@ move_git_repo () {
   mv "$BASE_PACKAGE" "$ASB_STORAGE_LOC/$BASE_PACKAGE"
 }
 
+# Build the package
 build_package () {
   OLD_PKGDEST="$PKGDEST"
-  export PKGDEST="$OUTPUT_DIR/$PACKAGE" 
+  export PKGDEST="$OUTPUT_DIR/$1"
   mkdir -p "$PKGDEST"
 
   # Download the dependencies, build the package, and clean up afterwards
@@ -82,7 +125,7 @@ build_package () {
     echo "Package has already been compiled. Would you like to recompile? [Y/n]"
     read -r CHOICE
 
-    case $CHOICE in 
+    case $CHOICE in
       'Y' | 'y' | '') makepkg -scf;;
       *) return 1;;
     esac;
